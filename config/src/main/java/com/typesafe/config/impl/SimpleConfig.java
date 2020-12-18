@@ -19,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -1171,6 +1172,17 @@ final class SimpleConfig implements Config, MergeableValue, Serializable {
     public SimpleConfig withValue(String pathExpression, ConfigValue v) {
         Path path = Path.newPath(pathExpression);
         return new SimpleConfig(root().withValue(path, v));
+    }
+
+    @Override
+    public Properties toProperties() {
+        Properties properties = new Properties();
+        for(Map.Entry<String, ConfigValue> entry : entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue().unwrapped().toString();
+            properties.setProperty(key, value);
+        }
+        return properties;
     }
 
     SimpleConfig atKey(ConfigOrigin origin, String key) {
