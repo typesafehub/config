@@ -4,11 +4,7 @@ import java.beans.BeanInfo;
 import java.beans.IntrospectionException;
 import java.beans.Introspector;
 import java.beans.PropertyDescriptor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
+import java.lang.reflect.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -25,6 +21,7 @@ import com.typesafe.config.ConfigMemorySize;
 import com.typesafe.config.ConfigValue;
 import com.typesafe.config.ConfigValueType;
 import com.typesafe.config.Optional;
+import com.typesafe.config.ConfigUtil;
 
 /**
  * Internal implementation detail, not ABI stable, do not touch.
@@ -165,12 +162,7 @@ public class ConfigBeanImpl {
         } else if (parameterClass == Set.class) {
             return getSetValue(beanClass, parameterType, parameterClass, config, configPropName);
         } else if (parameterClass == Map.class) {
-            // we could do better here, but right now we don't.
-            Type[] typeArgs = ((ParameterizedType)parameterType).getActualTypeArguments();
-            if (typeArgs[0] != String.class || typeArgs[1] != Object.class) {
-                throw new ConfigException.BadBean("Bean property '" + configPropName + "' of class " + beanClass.getName() + " has unsupported Map<" + typeArgs[0] + "," + typeArgs[1] + ">, only Map<String,Object> is supported right now");
-            }
-            return config.getObject(configPropName).unwrapped();
+            return getMapValue(beanClass, parameterType, config, configPropName);
         } else if (parameterClass == Config.class) {
             return config.getConfig(configPropName);
         } else if (parameterClass == ConfigObject.class) {
@@ -188,6 +180,34 @@ public class ConfigBeanImpl {
         } else {
             throw new ConfigException.BadBean("Bean property " + configPropName + " of class " + beanClass.getName() + " has unsupported type " + parameterType);
         }
+    }
+
+    private static Object getMapValue(Class<?> beanClass, Type parameterType, Config config, String configPropName) {
+        Type[] typeArgs = ((ParameterizedType)parameterType).getActualTypeArguments();
+        final boolean isEnumKey = typeArgs[0] instanceof Class && ((Class) typeArgs[0]).isEnum();
+        if (typeArgs[0] != String.class && !isEnumKey) {
+            throw new ConfigException.BadBean("Bean property '" + configPropName + "' of class " + beanClass.getName() + " has unsupported Map<" + typeArgs[0] + "," + typeArgs[1] + ">, only Map<String|Enum,?> is supported right now");
+        }
+        //In the case of Map<String, Object> we can just unwrap
+        if (typeArgs[1] == Object.class) {
+            return config.getObject(configPropName).unwrapped();
+        }
+        Map result = new HashMap<>();
+        final Config subConfig = config.getConfig(configPropName);
+        for (Map.Entry<String, ConfigValue> configValueEntry : subConfig.root().entrySet()) {
+            //Use quoted key name to allow keys with dots on their names
+            final String stringKey = configValueEntry.getKey();
+            Object key = stringKey;
+            if (isEnumKey) {
+                try {
+                    key = Enum.valueOf(((Class<Enum>) typeArgs[0]), stringKey);
+                } catch (IllegalArgumentException e) {
+                    throw new ConfigException.BadKey(stringKey, "Invalid enum map key error. Key name " + stringKey + " is not a valid member of enum " + typeArgs[0].getTypeName(), e);
+                }
+            }
+            result.put(key, getValue(beanClass, typeArgs[1], typeToClass(typeArgs[1], beanClass, stringKey), subConfig, ConfigUtil.quoteString(stringKey)));
+        }
+        return result;
     }
 
     private static Object getSetValue(Class<?> beanClass, Type parameterType, Class<?> parameterClass, Config config, String configPropName) {
@@ -301,5 +321,23 @@ public class ConfigBeanImpl {
             return null;
         }
         return getField(beanClass, fieldName);
+    }
+
+    private static Class<?> typeToClass(Type type, Class<?> beanClass, String configPropName) {
+        if (type instanceof Class) {
+            return (Class<?>) type;
+        } else if (type instanceof ParameterizedType) {
+            return typeToClass(((ParameterizedType) type).getRawType(), beanClass, configPropName);
+        } else if (type instanceof GenericArrayType) {
+            return Array.newInstance(typeToClass(((GenericArrayType)type).getGenericComponentType(), beanClass, configPropName), 0).getClass();
+        } else if (type instanceof TypeVariable) {
+            Type[] bounds = ((TypeVariable<?>) type).getBounds();
+            return bounds.length == 0 ? Object.class : typeToClass(bounds[0], beanClass, configPropName);
+        } else if (type instanceof WildcardType) {
+            Type[] bounds = ((WildcardType) type).getUpperBounds();
+            return bounds.length == 0 ? Object.class : typeToClass(bounds[0], beanClass, configPropName);
+        } else {
+            throw new ConfigException.BadBean("Bean property '" + configPropName + "' of class " + beanClass.getName() + " has unsupported type " + type);
+        }
     }
 }
