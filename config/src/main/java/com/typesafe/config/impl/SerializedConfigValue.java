@@ -21,6 +21,7 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Collection;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigException;
@@ -42,6 +43,8 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
     // this is the version used by Java serialization, if it increments it's
     // essentially an ABI break and bad
     private static final long serialVersionUID = 1L;
+    private static final int MAX_BYTES_LENGTH = 65535;
+
 
     // this is how we try to be extensible
     static enum SerializedField {
@@ -287,6 +290,16 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
                 m.put(field, v);
         }
     }
+    
+   private static Collection<String> split(String value, int charSize) {
+        List<String> strings = new ArrayList<String>();
+        int index = 0;
+        while (index < value.length()) {
+            strings.add(value.substring(index, Math.min(index + charSize, value.length())));
+            index += charSize;
+        }
+        return strings;
+    }
 
     private static void writeValueData(DataOutput out, ConfigValue value) throws IOException {
         SerializedValueType st = SerializedValueType.forValue(value);
@@ -311,7 +324,19 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
             out.writeUTF(((ConfigNumber) value).transformToString());
             break;
         case STRING:
-            out.writeUTF(((ConfigString) value).unwrapped());
+            String strVal = ((ConfigString) value).unwrapped();
+ 
+            List<String> values = new ArrayList<>();
+            if (strVal.getBytes().length >= MAX_BYTES_LENGTH) {
+                    values.addAll(split(strVal, MAX_BYTES_LENGTH/2)); // A char variable is typically 2-byte large.
+            } else {
+                    values.add(strVal);
+            }
+ 
+            for (String evalue : values) {
+                out.writeUTF(evalue);
+            }
+
             break;
         case LIST:
             ConfigList list = (ConfigList) value;
@@ -331,7 +356,7 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
         }
     }
 
-    private static AbstractConfigValue readValueData(DataInput in, SimpleConfigOrigin origin)
+    private static AbstractConfigValue readValueData(DataInput in, SimpleConfigOrigin origin, int byteLength)
             throws IOException {
         int stb = in.readUnsignedByte();
         SerializedValueType st = SerializedValueType.forInt(stb);
@@ -355,7 +380,12 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
             String sd = in.readUTF();
             return new ConfigDouble(origin, vd, sd);
         case STRING:
-            return new ConfigString.Quoted(origin, in.readUTF());
+            int readTimes =  byteLength/ MAX_BYTES_LENGTH + ((byteLength % MAX_BYTES_LENGTH == 0) ? 0 : 1);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < readTimes; i++){
+                sb.append(in.readUTF());
+            }
+            return new ConfigString.Quoted(origin, sb.toString());
         case LIST:
             int listSize = in.readInt();
             List<AbstractConfigValue> list = new ArrayList<AbstractConfigValue>(listSize);
@@ -404,8 +434,9 @@ class SerializedConfigValue extends AbstractConfigValue implements Externalizabl
             } else if (code == SerializedField.VALUE_DATA) {
                 if (origin == null)
                     throw new IOException("Origin must be stored before value data");
-                in.readInt(); // discard length
-                value = readValueData(in, origin);
+                int byteLength = in.readInt()*2; //The byte length of the String to be read. Multiplied by 2 is because one char takes 2 bytes generally.
+                value = readValueData(in, origin, byteLength);
+  
             } else if (code == SerializedField.VALUE_ORIGIN) {
                 in.readInt(); // discard length
                 origin = readOrigin(in, baseOrigin);
