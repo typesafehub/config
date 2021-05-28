@@ -23,13 +23,13 @@ import com.typesafe.config.impl.ConfigImplUtil;
  *
  */
 public final class ConfigParseOptions {
-    final ConfigSyntax syntax;
+    final ConfigFormat syntax;
     final String originDescription;
     final boolean allowMissing;
     final ConfigIncluder includer;
     final ClassLoader classLoader;
 
-    private ConfigParseOptions(ConfigSyntax syntax, String originDescription, boolean allowMissing,
+    private ConfigParseOptions(ConfigFormat syntax, String originDescription, boolean allowMissing,
             ConfigIncluder includer, ClassLoader classLoader) {
         this.syntax = syntax;
         this.originDescription = originDescription;
@@ -56,12 +56,21 @@ public final class ConfigParseOptions {
      *            a syntax or {@code null} for best guess
      * @return options with the syntax set
      */
-    public ConfigParseOptions setSyntax(ConfigSyntax syntax) {
+    public ConfigParseOptions setFormat(ConfigFormat syntax) {
         if (this.syntax == syntax)
             return this;
         else
             return new ConfigParseOptions(syntax, this.originDescription, this.allowMissing,
                     this.includer, this.classLoader);
+    }
+    
+    /**
+     * @deprecated use {@link #setFormat(ConfigFormat)} instead
+     * @param syntax the {@link ConfigSyntax} to use
+     * @return options with the syntax set
+     */
+    public ConfigParseOptions setSyntax(ConfigSyntax syntax) {
+    	return setFormat(syntax);
     }
 
     /**
@@ -72,16 +81,27 @@ public final class ConfigParseOptions {
      * @return options with the syntax set
      */
     public ConfigParseOptions setSyntaxFromFilename(String filename) {
-        ConfigSyntax syntax = ConfigImplUtil.syntaxFromExtension(filename);
-        return setSyntax(syntax);
+        ConfigFormat syntax = ConfigImplUtil.syntaxFromExtension(filename);
+        return setFormat(syntax);
     }
 
     /**
      * Gets the current syntax option, which may be null for "any".
      * @return the current syntax or null
      */
-    public ConfigSyntax getSyntax() {
+    public ConfigFormat getFormat() {
         return syntax;
+    }
+    /**
+     * @deprecated use {@link #getFormat()} instead.
+     * @return the current syntax or null
+     */
+    public ConfigSyntax getSyntax() {
+    	ConfigFormat format = getFormat();
+    	if(format instanceof ConfigSyntax) {
+    		return (ConfigSyntax)format;
+    	}
+    	return null;
     }
 
     /**

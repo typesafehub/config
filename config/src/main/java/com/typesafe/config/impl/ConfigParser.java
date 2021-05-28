@@ -20,7 +20,7 @@ final class ConfigParser {
     static AbstractConfigValue parse(ConfigNodeRoot document,
                                      ConfigOrigin origin, ConfigParseOptions options,
                                      ConfigIncludeContext includeContext) {
-        ParseContext context = new ParseContext(options.getSyntax(), origin, document,
+        ParseContext context = new ParseContext(options.getFormat(), origin, document,
                 SimpleIncluder.makeFull(options.getIncluder()), includeContext);
         return context.parse();
     }
@@ -30,7 +30,7 @@ final class ConfigParser {
         final private ConfigNodeRoot document;
         final private FullIncluder includer;
         final private ConfigIncludeContext includeContext;
-        final private ConfigSyntax flavor;
+        final private ConfigFormat flavor;
         final private ConfigOrigin baseOrigin;
         final private LinkedList<Path> pathStack;
 
@@ -39,7 +39,7 @@ final class ConfigParser {
         // problem we should be able to get rid of this variable.
         int arrayCount;
 
-        ParseContext(ConfigSyntax flavor, ConfigOrigin origin, ConfigNodeRoot document,
+        ParseContext(ConfigFormat flavor, ConfigOrigin origin, ConfigNodeRoot document,
                 FullIncluder includer, ConfigIncludeContext includeContext) {
             lineNumber = 1;
             this.document = document;
