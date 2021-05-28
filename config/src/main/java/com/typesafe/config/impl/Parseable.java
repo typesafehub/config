@@ -19,7 +19,13 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
+import java.nio.file.Paths;
 import java.util.*;
+import java.util.function.UnaryOperator;
+import java.util.regex.PatternSyntaxException;
 
 import com.typesafe.config.*;
 import com.typesafe.config.parser.*;
@@ -53,6 +59,8 @@ public abstract class Parseable implements ConfigParseable {
     };
 
     private static final int MAX_INCLUDE_DEPTH = 50;
+
+    private static final int MAX_FILES_SEARCH_DEPTH = 10;
 
     protected Parseable() {
     }
@@ -670,6 +678,129 @@ public abstract class Parseable implements ConfigParseable {
         return new ParseableFile(input, options);
     }
 
+    private final static class ParseableGlob extends Parseable {
+        final private String pattern;
+        final private Path relativeTo;
+
+        ParseableGlob(String pattern, Path relativeTo, ConfigParseOptions options) {
+            this.pattern = pattern;
+            relativeTo = relativeTo.toAbsolutePath();
+            if (!relativeTo.toFile().isDirectory())
+                relativeTo = relativeTo.getParent();
+            this.relativeTo = relativeTo;
+            postConstruct(options);
+        }
+
+        @Override
+        protected Reader reader() throws IOException {
+            throw new ConfigException.BugOrBroken("reader() should not be called on glob");
+        }
+
+        @Override
+        protected AbstractConfigObject rawParseValue(ConfigOrigin origin, ConfigParseOptions finalOptions)
+                throws IOException {
+            Path searchpath = globSearchBasePath(pattern);
+            UnaryOperator<Path> relativize = searchpath != null && searchpath.isAbsolute() ?
+                                                 UnaryOperator.identity() : relativeTo::relativize;
+            if (searchpath == null)
+                searchpath = relativeTo;
+            else if (!searchpath.isAbsolute())
+                searchpath = relativeTo.resolve(searchpath);
+
+            PathMatcher matcher = getMatcher(searchpath);
+            Iterable<AbstractConfigValue> objects = Files.find(searchpath, MAX_FILES_SEARCH_DEPTH, (p, fa) -> matcher.matches(relativize.apply(p)))
+                    .map(this::newFile).map(Parseable::parseValue)::iterator;
+
+            AbstractConfigObject merged = null;
+            for (AbstractConfigValue v : objects) {
+                if (merged == null) {
+                    merged = SimpleConfigObject.empty(origin);
+                }
+                merged = merged.withFallback(v);
+            }
+            if (merged == null)
+                throw new IOException("No files found by glob pattern '" + pattern + "' relative to path '" + relativeTo + "'");
+
+            return merged;
+        }
+
+        private PathMatcher getMatcher(Path path) {
+            try {
+                return path.getFileSystem().getPathMatcher("glob:" + pattern);
+            } catch (PatternSyntaxException e) {
+                // may be should return including file origin?
+                throw new ConfigException.IO(origin(), "Invalid glob pattern: " + e.getMessage(), e);
+            }
+        }
+
+        private Parseable newFile(Path path) {
+            File file = path.toFile();
+            if (ConfigImpl.traceLoadsEnabled())
+                trace("Loading config from file '" + file + "' found by 'glob:" + pattern + "'");
+            if (!file.canRead())
+                throw new ConfigException.IO(origin(), "File '" + path + "' found by glob pattern is not readable");
+            return Parseable.newFile(file, options());
+        }
+
+        @Override
+        ConfigSyntax guessSyntax() {
+            return ConfigImplUtil.syntaxFromExtension(pattern);
+        }
+
+        @Override
+        protected ConfigOrigin createOrigin() {
+            return SimpleConfigOrigin.newSimple(pattern);
+        }
+
+        @Override
+        public String toString() {
+            return getClass().getSimpleName() + "(glob:" + pattern + ")";
+        }
+    }
+
+    static Path globSearchBasePath(String pattern) {
+        // searching for the last slash before first wildcard character (the constant subpath of pattern)
+        int noWildcardSlash = 0;
+        StringBuilder path = new StringBuilder(pattern.length());
+        loop:
+        for (int i = 0; i < pattern.length(); ++i) {
+            char ch = pattern.charAt(i);
+            switch(ch) {
+            case '*':
+            case '?':
+            case '[':
+            case '{':
+                break loop;
+            case '\\':
+                if (++i < pattern.length() && ".[{(^$".indexOf(ch = pattern.charAt(i)) != -1) {
+                    // glob or regex metacharacter valid in path
+                    path.append(ch);
+                    break;
+                }
+                break loop;
+            case '/':
+                noWildcardSlash = path.length() + 1;
+                // no break
+            default:
+                path.append(ch);
+            }
+        }
+        if (noWildcardSlash == 0)
+            return null;
+        return Paths.get(path.substring(0, noWildcardSlash));
+    }
+
+    public static ConfigParseable newGlob(String pattern, ConfigParseOptions options) {
+        LinkedList<Parseable> stack = parseStack.get();
+        if (stack.isEmpty())
+            throw new ConfigException.BugOrBroken("newGlob(String, ConfigParseOptions) called with empty parseStack (including glob outside of parse process?)");
+
+        Path relativePath = Paths.get("");
+        // may be should walk through stack to find the first ParseableFile item?
+        if (stack.getFirst() instanceof ParseableFile)
+            relativePath = ((ParseableFile) stack.getFirst()).input.toPath();
+        return new ParseableGlob(pattern, relativePath, options);
+    }
 
     private final static class ParseableResourceURL extends ParseableURL {
 
