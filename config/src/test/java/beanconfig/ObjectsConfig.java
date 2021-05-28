@@ -5,10 +5,12 @@ import com.typesafe.config.Optional;
 
 public class ObjectsConfig {
     public static class ValueObject {
+        private String mandatoryValue;
         @Optional
         private String optionalValue;
-        private String mandatoryValue;
-        private String Default;
+        @Optional
+        private String defaultedValue = "hello";
+        private String optionalMethodValue;
 
         public String getMandatoryValue() {
           return mandatoryValue;
@@ -26,13 +28,21 @@ public class ObjectsConfig {
           this.optionalValue = optionalValue;
         }
 
-        @Optional
-        public String getDefault() {
-          return Default;
+        public String getDefaultedValue() {
+          return defaultedValue;
         }
 
-        public void setDefault(String Default) {
-          this.Default = Default;
+        public void setDefaultedValue(String defaultedValue) {
+          this.defaultedValue = defaultedValue;
+        }
+
+        @Optional
+        public String getDefault() {
+          return optionalMethodValue;
+        }
+
+        public void setDefault(String optionalMethodValue) {
+          this.optionalMethodValue = optionalMethodValue;
         }
     }
 
